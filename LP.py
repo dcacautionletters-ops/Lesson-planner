@@ -11,6 +11,7 @@ def load_planner_data(file):
     temp_df = pd.read_excel(file, header=None)
     
     # Find the row index that contains "Course Name"
+    # This searches the whole file for the header, making it robust
     header_idx = temp_df[temp_df.apply(lambda row: row.astype(str).str.contains("Course Name", na=False).any(), axis=1)].index[0]
     
     # Load the actual data using that index
@@ -24,6 +25,7 @@ def apply_pro_styling(filename):
     wb = load_workbook(filename)
     ws = wb.active
     
+    # Define styles
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=11, name='Calibri')
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), 
@@ -34,8 +36,7 @@ def apply_pro_styling(filename):
     for cell in ws[1]:
         cell.fill = header_fill; cell.font = header_font; cell.alignment = center; cell.border = thin_border
 
-    # Merge Subject cells (Column 'Course Name' - usually index 2, checking headers)
-    # Assuming 'Course Name' is the 2nd column
+    # Merge Subject cells (Column 'Course Name' is index 2)
     i = 2
     while i <= ws.max_row:
         j = i + 1
@@ -76,4 +77,4 @@ if lp_file and hc_files and st.button("Generate Professional Report"):
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"An error occurred: {e}")
