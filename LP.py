@@ -2,101 +2,99 @@ import streamlit as st
 import pandas as pd
 import io
 
-# --- Helper Functions ---
-
-def find_header_row(file_obj, search_term="Batch"):
-    """Scans the file to find the row index where the header starts."""
-    # We read a preview of the file to find the header row
-    try:
-        temp_df = pd.read_csv(file_obj, header=None, nrows=20, encoding='latin1')
-        file_obj.seek(0) # Reset file pointer after reading
-        for index, row in temp_df.iterrows():
-            if search_term in row.values:
-                return index
-    except Exception:
-        return 0
-    return 0
-
-def load_data(uploaded_file):
-    """Loads CSV/Excel files robustly."""
-    header_idx = find_header_row(uploaded_file)
+# --- Professional Grade File Loader ---
+def safe_load_csv(file_obj, keyword='Batch'):
+    """
+    Reads a CSV, ignores garbage metadata/titles at the top,
+    and automatically detects the header row.
+    """
+    file_obj.seek(0)
+    # Read the file line by line to find the header index
+    lines = file_obj.readlines()
+    header_idx = 0
+    for i, line in enumerate(lines):
+        line_str = line.decode('latin1', errors='ignore')
+        if keyword in line_str:
+            header_idx = i
+            break
     
-    # Try loading with utf-8, fallback to latin1
-    try:
-        df = pd.read_csv(uploaded_file, skiprows=header_idx, encoding='utf-8')
-    except:
-        uploaded_file.seek(0)
-        df = pd.read_csv(uploaded_file, skiprows=header_idx, encoding='latin1')
-        
-    df.columns = df.columns.str.strip() # Remove extra spaces from headers
+    file_obj.seek(0)
+    # Load using engine='python' for maximum compatibility and skip bad lines
+    df = pd.read_csv(
+        file_obj, 
+        skiprows=header_idx, 
+        encoding='latin1', 
+        on_bad_lines='skip', 
+        engine='python'
+    )
+    # Clean whitespace from column names
+    df.columns = df.columns.str.strip()
     return df
 
-# --- Main App ---
-
-st.set_page_config(page_title="Lesson Planner Tracker", layout="wide")
+# --- UI Setup ---
+st.set_page_config(page_title="Lesson Tracker", layout="wide")
 st.title("📊 Lesson Planner & Attendance Tracker")
-
-st.markdown("""
-### Instructions:
-1. Upload your **Lesson Planner Report** and **Attendance Report**.
-2. The system will automatically detect the data headers.
-3. Click **'Generate Consolidated Report'** to merge and process the files.
-""")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    planner_file = st.file_uploader("Upload Lesson Planner Report", type=['csv', 'xlsx'])
+    planner_file = st.file_uploader("Upload Lesson Planner Report", type=['csv'])
 with col2:
-    attendance_file = st.file_uploader("Upload Attendance Report", type=['csv', 'xlsx'])
+    attendance_file = st.file_uploader("Upload Attendance Report", type=['csv'])
 
 if planner_file and attendance_file:
     if st.button("Generate Consolidated Report"):
-        with st.spinner("Processing data..."):
-            # Load Data
-            planner_df = load_data(planner_file)
-            attendance_df = load_data(attendance_file)
-            
-            # 1. Process Attendance: Get Max Hours per Batch & Course
-            # We group to ensure we capture the maximum hours conducted if duplicates exist
-            attendance_grouped = attendance_df.groupby(['Batch', 'Course Name']).agg({
-                'Hours Conducted': 'max'
-            }).reset_index()
-            
-            # 2. Merge Data
-            # Merging on Batch and Course Name
-            final_df = pd.merge(
-                planner_df, 
-                attendance_grouped, 
-                on=['Batch', 'Course Name'], 
-                how='left'
-            )
-            
-            # 3. Rename and Reorder Columns to your requirement
-            # Mapping existing columns to the final format
+        with st.spinner("Parsing and merging data..."):
             try:
-                # Selecting and cleaning the output
-                output_df = final_df[[
+                # 1. Load Data
+                df_planner = safe_load_csv(planner_file, keyword='Batch')
+                df_attendance = safe_load_csv(attendance_file, keyword='Batch')
+
+                # 2. Process Attendance (Aggregate max hours)
+                # Grouping ensures we get 1 record per Batch/Course
+                attendance_grouped = df_attendance.groupby(['Batch', 'Course Name'])['Hours Conducted'].max().reset_index()
+
+                # 3. Merge
+                # Left join keeps all planner records even if no attendance is found
+                merged_df = pd.merge(
+                    df_planner, 
+                    attendance_grouped, 
+                    on=['Batch', 'Course Name'], 
+                    how='left'
+                )
+
+                # 4. Final Selection & Formatting
+                # Ensure the columns match your specific requirement list
+                cols_to_keep = [
                     'Batch', 'Course Name', 'Faculty Name', 
                     'Session planned', 'No Of Sessions Taken', 
                     'Syllabus Coverage (%)', 'Hours Conducted'
-                ]].copy()
+                ]
                 
-                # Add Serial Number
-                output_df.insert(0, 'Sl No', range(1, len(output_df) + 1))
-                
-                st.success("Successfully Consolidated!")
-                st.dataframe(output_df, use_container_width=True)
-                
-                # Download
-                csv_buffer = io.BytesIO()
-                output_df.to_csv(csv_buffer, index=False)
-                st.download_button(
-                    label="Download Excel/CSV Report",
-                    data=csv_buffer.getvalue(),
-                    file_name="Consolidated_Lesson_Report.csv",
-                    mime="text/csv"
-                )
-            except KeyError as e:
-                st.error(f"Column Mapping Error: Please check if the column names match exactly. Missing: {e}")
-                st.write("Current columns found:", final_df.columns.tolist())
+                # Check if columns exist to prevent KeyError
+                missing_cols = [c for c in cols_to_keep if c not in merged_df.columns]
+                if missing_cols:
+                    st.error(f"Missing columns in report: {missing_cols}")
+                    st.write("Available columns:", merged_df.columns.tolist())
+                else:
+                    final_df = merged_df[cols_to_keep].copy()
+                    
+                    # Add Sl No
+                    final_df.insert(0, 'Sl No', range(1, len(final_df) + 1))
+                    
+                    # Show result
+                    st.success("Consolidation Complete!")
+                    st.dataframe(final_df)
+                    
+                    # Prepare Download
+                    csv_data = final_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "Download Consolidated Report", 
+                        data=csv_data, 
+                        file_name="Final_Consolidated_Report.csv",
+                        mime="text/csv"
+                    )
+
+            except Exception as e:
+                st.error(f"An error occurred during processing: {e}")
+                st.write("Tip: Ensure your file headers match exactly (e.g., 'Course Name' vs 'Course_Name').")
