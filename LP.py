@@ -1,80 +1,86 @@
 import streamlit as st
 import pandas as pd
 import io
-from openpyxl import load_workbook
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-# --- 1. DYNAMIC DATA LOADING ---
-def load_planner_data(file):
-    """Automatically finds the header row and loads the Excel file."""
-    # Load first few rows to find where the header is
-    temp_df = pd.read_excel(file, header=None)
+def process_data(planner_df, attendance_df):
+    """
+    Consolidates the Lesson Planner and Attendance data.
+    """
+    # 1. Standardize column names (stripping whitespace)
+    planner_df.columns = planner_df.columns.str.strip()
+    attendance_df.columns = attendance_df.columns.str.strip()
+
+    # 2. Process Attendance: Get Max Hours Conducted per Batch/Course
+    # We group by Batch and Course Name to get the max hours and keep the staff name
+    attendance_grouped = attendance_df.groupby(['Batch', 'Course Name']).agg({
+        'Hours Conducted': 'max',
+        'Staff Name': 'first'  # Keeps the first staff name found for this group
+    }).reset_index()
+
+    # 3. Merge: Left join planner data with attendance
+    # We use both Batch and Course Name as the unique key
+    consolidated = pd.merge(
+        planner_df, 
+        attendance_grouped, 
+        on=['Batch', 'Course Name'], 
+        how='left'
+    )
+
+    # 4. Final Cleanup: Select and rename columns as requested
+    # Mapping to your specific order
+    final_df = consolidated[[
+        'Batch', 'Course Name', 'Faculty Name', 
+        'Session planned', 'No Of Sessions Taken', 
+        'Syllabus Coverage (%)', 'Hours Conducted'
+    ]]
     
-    # Find the row index that contains "Course Name"
-    # This searches the whole file for the header, making it robust
-    header_idx = temp_df[temp_df.apply(lambda row: row.astype(str).str.contains("Course Name", na=False).any(), axis=1)].index[0]
+    # Add an index column
+    final_df.insert(0, 'Sl No', range(1, len(final_df) + 1))
     
-    # Load the actual data using that index
-    df = pd.read_excel(file, header=header_idx)
-    # Strip whitespace from column names to prevent matching errors
-    df.columns = df.columns.str.strip()
-    return df
+    return final_df
 
-# --- 2. STYLING ENGINE ---
-def apply_pro_styling(filename):
-    wb = load_workbook(filename)
-    ws = wb.active
+# --- Streamlit UI ---
+st.set_page_config(page_title="Lesson Planner Tracker", layout="wide")
+st.title("📊 Lesson Planner & Attendance Tracker")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    planner_file = st.file_uploader("Upload Lesson Planner Report", type=['xlsx', 'csv'])
+with col2:
+    attendance_file = st.file_uploader("Upload Attendance Report", type=['xlsx', 'csv'])
+
+if planner_file and attendance_file:
+    # Read files
+    # Note: Using header search logic to handle the row 3/4 issue
+    planner_df = pd.read_csv(planner_file, skiprows=5) # Adjust skiprows based on file structure
     
-    # Define styles
-    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-    header_font = Font(color="FFFFFF", bold=True, size=11, name='Calibri')
-    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), 
-                         top=Side(style='thin'), bottom=Side(style='thin'))
-    center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    # Logic for attendance start row
+    # We read the first 5 rows to identify which row the "Batch" header starts on
+    temp_df = pd.read_csv(attendance_file, nrows=5)
+    # Automatically finding the row where 'Batch' exists
+    skip_rows = 0
+    for i in range(len(temp_df)):
+        if "Batch" in temp_df.iloc[i].values:
+            skip_rows = i
+            break
+            
+    attendance_df = pd.read_csv(attendance_file, skiprows=skip_rows)
 
-    # Style Header
-    for cell in ws[1]:
-        cell.fill = header_fill; cell.font = header_font; cell.alignment = center; cell.border = thin_border
-
-    # Merge Subject cells (Column 'Course Name' is index 2)
-    i = 2
-    while i <= ws.max_row:
-        j = i + 1
-        while j <= ws.max_row and ws.cell(row=j, column=2).value == ws.cell(row=i, column=2).value:
-            j += 1
-        if j - i > 1:
-            ws.merge_cells(start_row=i, start_column=2, end_row=j-1, end_column=2)
-            ws.cell(row=i, column=2).alignment = Alignment(vertical='center', horizontal='center')
-        i = j
-    wb.save(filename)
-
-# --- 3. APP UI ---
-st.set_page_config(page_title="Pro Report Generator", layout="wide")
-st.title("🎓 Professional WD Report Generator")
-
-lp_file = st.file_uploader("Upload Lesson Planner (.xlsx)", type=['xlsx'])
-hc_files = st.file_uploader("Upload Hours Conducted Files (.xlsx)", type=['xlsx'], accept_multiple_files=True)
-
-if lp_file and hc_files and st.button("Generate Professional Report"):
-    try:
-        # Load Planner with automatic header detection
-        df_lp = load_planner_data(lp_file)
-        
-        # Sort logic
-        batch_order = ['BCA 2025', 'BCA 2024', 'BCA 2023']
-        # Ensure we are checking the right column name
-        df_lp['Sort_Key'] = pd.Categorical(df_lp['Batch'], categories=batch_order, ordered=True)
-        df_final = df_lp.sort_values(['Course Name', 'Sort_Key'])
-        
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_final.to_excel(writer, index=False, sheet_name="Professional Report")
-        
-        apply_pro_styling(output)
-        
-        st.success("Report Generated Successfully!")
-        st.download_button("Download Report", data=output.getvalue(), file_name="Pro_Academic_Report.xlsx", 
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
+    if st.button("Process & Consolidate"):
+        with st.spinner("Processing data..."):
+            result_df = process_data(planner_df, attendance_df)
+            
+            st.success("Data consolidated successfully!")
+            st.dataframe(result_df)
+            
+            # Download button
+            csv = result_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "Download Consolidated Report", 
+                data=csv, 
+                file_name="Consolidated_Report.csv",
+                mime="text/csv"
+            )
+else:
+    st.info("Please upload both files to proceed.")
