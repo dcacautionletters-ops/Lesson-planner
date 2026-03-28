@@ -32,14 +32,10 @@ def apply_pro_styling(writer, sheet_name):
         worksheet.column_dimensions[col[0].column_letter].width = 25
 
 def process_attendance_file(uploaded_file):
-    """Processes the 'Consolidated Attendance Percentage Report' format."""
     if uploaded_file is None: return pd.DataFrame()
-    # Header is at row 3 (Index 2)
     df = pd.read_excel(uploaded_file, header=2)
-    
-    # Standardizing columns based on your provided file structure:
-    # Col 6: Batch, Col 8: Course Name, Col 9: Hours Conducted, Col 16: Staff Name
     try:
+        # Col 6: Batch, Col 8: Course Name, Col 9: Hours Conducted, Col 16: Staff Name
         df_clean = pd.DataFrame({
             'Batch': df.iloc[:, 6],
             'Subject': df.iloc[:, 8],
@@ -52,7 +48,6 @@ def process_attendance_file(uploaded_file):
     processed = []
     for _, row in df_clean.iterrows():
         names = re.split(r',| AND ', str(row['FacultyRaw']), flags=re.IGNORECASE)
-        # Extract Section (last letter of Batch)
         section = str(row['Batch']).strip()[-1] if len(str(row['Batch'])) > 0 else ""
         for n in names:
             processed.append({
@@ -64,7 +59,7 @@ def process_attendance_file(uploaded_file):
     return pd.DataFrame(processed)
 
 # --- STREAMLIT UI ---
-st.title("🎓 Academic Report Generator (v2.1)")
+st.title("🎓 Academic Report Generator")
 
 col1, col2, col3 = st.columns(3)
 with col1: lp_file = st.file_uploader("1. Lesson Planner", type=['xlsx'])
@@ -88,7 +83,6 @@ if all([lp_file, mca_hc_file, bca_hc_file]):
                     final_rows = []
 
                     for key in batch_keys:
-                        # Find rows in Planner matching the Batch Key
                         batch_df = df_lp[df_lp.iloc[:, 2].astype(str).str.contains(key, na=False)].copy()
                         
                         for _, lp_row in batch_df.iterrows():
@@ -116,8 +110,9 @@ if all([lp_file, mca_hc_file, bca_hc_file]):
                                 'Course Name': lp_row.iloc[6],
                                 'Faculty Name': lp_row.iloc[8],
                                 'Planned Sessions': pd.to_numeric(lp_row.iloc[10], errors='coerce') or 0,
-                                'As per Time Table': lp_row.iloc[16],
-                                'Syllabus Coverage %': lp_row.iloc[18],
+                                'As per Time Table': lp_row.iloc[11], # Col L (Index 11)
+                                'No of sessions taken': lp_row.iloc[16], # Col Q (Index 16)
+                                'Syllabus Coverage %': lp_row.iloc[18], # Col S (Index 18)
                                 'Actual Hours Conducted': actual_hrs
                             })
 
@@ -126,21 +121,22 @@ if all([lp_file, mca_hc_file, bca_hc_file]):
                             'Faculty Name': lambda x: ', '.join(x.unique()),
                             'Planned Sessions': 'max',
                             'As per Time Table': 'max',
+                            'No of sessions taken': 'max',
                             'Syllabus Coverage %': 'max',
                             'Actual Hours Conducted': 'max'
                         })
                         
-                        # Logic: Planned - Actual (Show negative if under-conducted)
+                        # LOGIC: Actual - Planned 
+                        # Result: Negative = Under-conducted, Positive = Over-conducted
                         df_final['Deviation'] = df_final['Actual Hours Conducted'] - df_final['Planned Sessions']
-                        df_final.insert(0, 'Sl No.', range(1, len(df_final) + 1))
                         
+                        df_final.insert(0, 'Sl No.', range(1, len(df_final) + 1))
                         df_final.to_excel(writer, sheet_name=label, index=False)
                         apply_pro_styling(writer, label)
                         sheets_created += 1
 
-                # If no data matches, create a dummy sheet to prevent the 'At least one sheet' error
                 if sheets_created == 0:
-                    pd.DataFrame({"Status": ["No matching data found for selected Batches"]}).to_excel(writer, sheet_name="No_Data")
+                    pd.DataFrame({"Status": ["No Data Found"]}).to_excel(writer, sheet_name="No_Data")
 
             st.success("✅ Compilation Successful!")
             st.download_button("📥 Download Final Report", output.getvalue(), "Academic_Consolidated_Report.xlsx")
