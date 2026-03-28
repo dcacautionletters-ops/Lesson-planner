@@ -3,6 +3,7 @@ import pandas as pd
 import difflib
 import re
 import io
+import numpy as np
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 # --- CONFIGURATION ---
@@ -35,7 +36,6 @@ def apply_pro_styling_and_merge(writer, sheet_name, df_original):
             cell.alignment = Alignment(horizontal='center', vertical='center')
             cell.border = thin_border
     
-    # --- PHYSICAL MERGE LOGIC ---
     start_row = 2
     unique_courses = df_original['Course Name'].unique()
     for course in unique_courses:
@@ -88,10 +88,10 @@ st.title("📑 Universal Academic Reporting Hub")
 
 lp_col, att_col = st.columns([1, 2])
 with lp_col: lp_file = st.file_uploader("1. Lesson Planner", type=['xlsx'])
-with att_col: att_files = st.file_uploader("2. Attendance Reports (Single or Multiple)", type=['xlsx'], accept_multiple_files=True)
+with att_col: att_files = st.file_uploader("2. Attendance Reports", type=['xlsx'], accept_multiple_files=True)
 
 if lp_file and att_files:
-    if st.button("🚀 Generate Universal Consolidated Report"):
+    if st.button("🚀 Generate Final Report"):
         try:
             df_lp = pd.read_excel(lp_file, header=5)
             all_att_dfs = [process_attendance_file(f) for f in att_files]
@@ -133,13 +133,19 @@ if lp_file and att_files:
                             'Faculty Name': lp_row.iloc[8],
                             'Planned Sessions': pd.to_numeric(lp_row.iloc[10], errors='coerce') or 0,
                             'As per Time Table': lp_row.iloc[11],
-                            'No of sessions taken': lp_row.iloc[16],
-                            'Syllabus Coverage %': lp_row.iloc[18],
+                            'No of sessions taken': pd.to_numeric(lp_row.iloc[16], errors='coerce') or 0,
                             'Actual Hours Conducted': actual
                         })
 
                     if raw_rows:
                         df_res = pd.DataFrame(raw_rows).sort_values(by=['Course Name', 'Batch'])
+                        
+                        # --- PRECISION CALCULATION ---
+                        # Syllabus Coverage % = (No of sessions taken / Planned Sessions) * 100
+                        df_res['Syllabus Coverage %'] = (df_res['No of sessions taken'] / df_res['Planned Sessions'].replace(0, np.nan)) * 100
+                        df_res['Syllabus Coverage %'] = df_res['Syllabus Coverage %'].fillna(0).round(2)
+                        
+                        # Deviation = Actual - Planned
                         df_res['Deviation'] = df_res['Actual Hours Conducted'] - df_res['Planned Sessions']
                         df_for_merge = df_res.copy()
 
@@ -158,7 +164,7 @@ if lp_file and att_files:
                         final_df.to_excel(writer, sheet_name=sheet_name, index=False)
                         apply_pro_styling_and_merge(writer, sheet_name, df_for_merge)
 
-            st.success("✨ Universal Report Generated Successfully!")
-            st.download_button("📥 Download Final Report", output.getvalue(), "Universal_Academic_Consolidated_Report.xlsx")
+            st.success("✨ Report Generated with Precise Coverage Calculation!")
+            st.download_button("📥 Download Final Report", output.getvalue(), "Consolidated_Academic_Report.xlsx")
         except Exception as e:
             st.error(f"Error: {e}")
