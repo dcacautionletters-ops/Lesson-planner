@@ -48,7 +48,10 @@ def process_attendance_file(uploaded_file):
     processed = []
     for _, row in df_clean.iterrows():
         names = re.split(r',| AND ', str(row['FacultyRaw']), flags=re.IGNORECASE)
-        section = str(row['Batch']).strip()[-1] if len(str(row['Batch'])) > 0 else ""
+        # Extract Section (Last char if it's a letter, else full name)
+        batch_str = str(row['Batch']).strip()
+        section = batch_str[-1] if batch_str[-1].isalpha() else batch_str
+        
         for n in names:
             processed.append({
                 'Subject': str(row['Subject']).upper().strip(),
@@ -59,7 +62,7 @@ def process_attendance_file(uploaded_file):
     return pd.DataFrame(processed)
 
 # --- STREAMLIT UI ---
-st.title("🎓 Academic Report Generator")
+st.title("🎓 Academic Report Generator (BCA AIML & DS Included)")
 
 col1, col2, col3 = st.columns(3)
 with col1: lp_file = st.file_uploader("1. Lesson Planner", type=['xlsx'])
@@ -73,7 +76,13 @@ if all([lp_file, mca_hc_file, bca_hc_file]):
             att_data = pd.concat([process_attendance_file(mca_hc_file), 
                                   process_attendance_file(bca_hc_file)], ignore_index=True)
             
-            batch_keys = ["BCA 2023", "BCA 2024", "BCA 2025", "MCA 2024", "MCA 2025"]
+            # UPDATED BATCH KEYS TO INCLUDE AIML AND DS
+            batch_keys = [
+                "BCA 2023", "BCA 2024", "BCA 2025", 
+                "BCA AIML", "BCA DS", 
+                "MCA 2024", "MCA 2025"
+            ]
+            
             output = io.BytesIO()
 
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -83,6 +92,7 @@ if all([lp_file, mca_hc_file, bca_hc_file]):
                     final_rows = []
 
                     for key in batch_keys:
+                        # Find matching Batch rows in Lesson Planner
                         batch_df = df_lp[df_lp.iloc[:, 2].astype(str).str.contains(key, na=False)].copy()
                         
                         for _, lp_row in batch_df.iterrows():
@@ -93,7 +103,8 @@ if all([lp_file, mca_hc_file, bca_hc_file]):
                             if (is_lab and "LAB" not in course) or (not is_lab and "LAB" in course): continue
 
                             batch_full = str(lp_row.iloc[2]).strip()
-                            section = batch_full[-1]
+                            # Matching Section Logic
+                            section = batch_full[-1] if batch_full[-1].isalpha() else batch_full
                             
                             m_faculty = get_closest_match(faculty, att_data['Faculty'].unique().tolist())
                             m_course = difflib.get_close_matches(course, att_data['Subject'].unique(), n=1, cutoff=0.5)
@@ -110,9 +121,9 @@ if all([lp_file, mca_hc_file, bca_hc_file]):
                                 'Course Name': lp_row.iloc[6],
                                 'Faculty Name': lp_row.iloc[8],
                                 'Planned Sessions': pd.to_numeric(lp_row.iloc[10], errors='coerce') or 0,
-                                'As per Time Table': lp_row.iloc[11], # Col L (Index 11)
-                                'No of sessions taken': lp_row.iloc[16], # Col Q (Index 16)
-                                'Syllabus Coverage %': lp_row.iloc[18], # Col S (Index 18)
+                                'As per Time Table': lp_row.iloc[11], # Col L
+                                'No of sessions taken': lp_row.iloc[16], # Col Q
+                                'Syllabus Coverage %': lp_row.iloc[18], # Col S
                                 'Actual Hours Conducted': actual_hrs
                             })
 
@@ -127,7 +138,7 @@ if all([lp_file, mca_hc_file, bca_hc_file]):
                         })
                         
                         # LOGIC: Actual - Planned 
-                        # Result: Negative = Under-conducted, Positive = Over-conducted
+                        # Negative = Shortage, Positive = Extra
                         df_final['Deviation'] = df_final['Actual Hours Conducted'] - df_final['Planned Sessions']
                         
                         df_final.insert(0, 'Sl No.', range(1, len(df_final) + 1))
@@ -136,7 +147,7 @@ if all([lp_file, mca_hc_file, bca_hc_file]):
                         sheets_created += 1
 
                 if sheets_created == 0:
-                    pd.DataFrame({"Status": ["No Data Found"]}).to_excel(writer, sheet_name="No_Data")
+                    pd.DataFrame({"Status": ["No Data Found for AIML/DS/BCA"]}).to_excel(writer, sheet_name="No_Data")
 
             st.success("✅ Compilation Successful!")
             st.download_button("📥 Download Final Report", output.getvalue(), "Academic_Consolidated_Report.xlsx")
